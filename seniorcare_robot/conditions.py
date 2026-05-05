@@ -1,5 +1,12 @@
 import py_trees
 from rclpy.node import Node
+from enum import IntEnum
+
+class RobotMode(IntEnum):
+    INIT = 0
+    FOLLOWING_MODE = 1
+    PATROL_MODE = 2
+
 
 class IsTalkRequested(py_trees.behaviour.Behaviour):
     def __init__(self, node: Node):
@@ -23,27 +30,28 @@ class IsPoseRecogRequested(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.FAILURE
 
 
-class IsMode1Selected(py_trees.behaviour.Behaviour):
-    def __init__(self, node: Node):
-        super().__init__(name="IsMode1Selected")
+class FollowingMode(py_trees.behaviour.Behaviour):
+    def __init__(self, node: Node, mode: int):
+        super().__init__(name="FollowingMode")
         self.node = node
+        self.mode = mode
 
     def update(self):
-        if self.node.tracking_mode == 1:
+        if self.mode == RobotMode.FOLLOWING_MODE:#visible and nearby
             print("Mode 1 selected: User Tracking")
-            return py_trees.common.Status.SUCCESS
-        if self.node.tracking_mode == 0:
-            print("Mode 0 selected: Don't follow me")
-            return py_trees.common.Status.FAILURE
-        return py_trees.common.Status.FAILURE
+            return py_trees.common.Status.SUCCESS #next step(=leaf node)
+        elif self.mode == RobotMode.PATROL_MODE:  # not visible and not talk requested or dontfollow
+            print("Mode 1 selected: Don't follow me") #go to patrol mode
+        return py_trees.common.Status.FAILURE #go to first
 
 
-class IsMode2Selected(py_trees.behaviour.Behaviour):
+class PatrolMode(py_trees.behaviour.Behaviour):
     def __init__(self, node: Node):
-        super().__init__(name="IsMode2Selected")
+        super().__init__(name="PatrolMode")
         self.node = node
 
     def update(self):
-        if self.node.tracking_mode == 2:
-            return py_trees.common.Status.SUCCESS
-        return py_trees.common.Status.FAILURE
+        if self.node.is_talk_requested is True:
+            print("Voice recog, go to person pos")
+            return py_trees.common.Status.FAILURE  # Patrol 중단, 다음 branch로
+        return py_trees.common.Status.SUCCESS  # Patrol 계속

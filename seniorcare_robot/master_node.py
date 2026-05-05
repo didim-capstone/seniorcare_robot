@@ -13,21 +13,28 @@ import py_trees
 
 import argparse
 import sys
+from enum import IntEnum
 
-from senior_msg.msg import ImuMsg, Vison2Master, Master2llm
+from senior_msg.msg import ImuMsg, Vison2Master, Master2llm, Master2Base
+
+from senior_care_robot.base_commander import BaseCommander
 
 from seniorcare_robot.conditions import (
     IsTalkRequested,
     IsPoseRecogRequested,
-    IsMode1Selected,
-    IsMode2Selected,
+    FollowingMode,
+    PatrolMode,
+    IsVoiceCallRequested,
+    RobotMode,
 )
 
 from seniorcare_robot.actions import (
     TryTalk,
-    RunActionRecognition,
-    MoveToTarget,
+    TrackingPerson,
+    MoveToHomeTarget,
+    MoveToLidarPersonPosition,
 )
+
 
 class StatePublisher(Node):
     def __init__(self):
@@ -40,31 +47,33 @@ class StatePublisher(Node):
                                    durability=QoSDurabilityPolicy.VOLATILE)
 
         self.state_publisher_ = self.create_publisher(Float64MultiArray, "state", qos_profile)
-        self.jointstate_publisher = self.create_publisher(
-            Master2llm, "master2llm", qos_profile
+        self.motor_pub = self.create_publisher(
+            Master2Base, "/base_command", qos_profile
         )
 
         # Subscribers
-        self.imu_subscriber = self.create_subscription(
+        self.imu_sub = self.create_subscription(
             ImuMsg, 'Imu', self.imu_callback, qos_realiable)
-        self.vision_subscriber = self.create_subscription(
+        self.vision_sub = self.create_subscription(
             Vison2Master, "vision2master", self.vision_callback, qos_realiable
         )
-        self.llm_subscriber = self.create_subscription(
+        self.llm_sub = self.create_subscription(
             Master2llm, "llm2master", self.llm_callback, qos_realiable
         )
 
+        self.mode = 0
         self.tracking_mode = 1
         self.pose_recog_requested = False
         self.talk_requested = False
+        self.commander = BaseCommander(self.motor_pub)
 
         self.create_timer(0.01, self.tick_tree)
         self.tree = self.create_behavior_tree()
 
-
     def slam_callback(self, msg):
         self.person_x = msg.x
         self.person_y = msg.y
+        self.person_dist = msg.dist
         self.home_x = msg.home_x
         self.home_y = msg.home_y
         self.robot_x = msg.robot_x
@@ -79,21 +88,36 @@ class StatePublisher(Node):
         self.tracking_mode = msg.mode
 
     def llm_callback(self, msg):
-        self.tracking_mode = msg.mode
+        self.is_talk_requested = msg.mode
+        self.dont_follow = msg.mode
 
     def tick_tree(self):
-
         self.tree.tick()
-        # self.tree_mode.tick()
+
         self.get_logger().info(
             f"[STATE] mode={self.tracking_mode}, "
-            f"talk={self.talk_requested}, "
+            f"talk={self.is_talk_requested}, "
+            f"talk_2={self.dont_follow},"
             f"action={self.pose_recog_requested}, "
         )
 
         # self.jointstate_publisher.publish(dxl)
 
     def create_behavior_tree(self):
+        # mode setting(transition)
+        if self.dont_follow is True:
+            if self.detect_fall is True:
+                self.mode = RobotMode.EMERGENCY_MODE
+            else:
+                self.mode = RobotMode.PATROL_MODE
+        elif ((self.is_talk_requested is True) or
+                (self.dont_follow is False and self.person_dist < 30)):#self.person_x != 999 or
+                # 사람이 가까이 위치하고 카메라에 보일 때(근데 가까이 위치했는데 카메라에 안 보이는 경우?->or)
+            self.mode = RobotMode.FOLLOWING_MODE
+        else:#stop, init
+            pass
+
+
         # Event 2: Talk
         talk_branch = py_trees.composites.Sequence(name="TALK_BRANCH", memory=False)
         talk_branch.add_children(
@@ -102,32 +126,24 @@ class StatePublisher(Node):
                 TryTalk(self),
             ]
         )
-        # Event 1: Action Recognition
-        action_recog_branch = py_trees.composites.Sequence(
-            name="ACTION_RECOG_BRANCH", memory=False
+        # Mode 1: User Tracking
+        tracking_branch = py_trees.composites.Sequence(
+            name="TRACKING_BRANCH", memory=False
         )
-        action_recog_branch.add_children(
+        tracking_branch.add_children(
             [
-                IsPoseRecogRequested(self),
-                RunActionRecognition(self),
+                FollowingMode(self, self.mode),
+                TrackingPerson(self, self.commander),
             ]
         )
-        # Mode 1: User Tracking
-        mode1_branch = py_trees.composites.Sequence(
-            name="MODE1_TRACKING_BRANCH", memory=False
-        )
-        mode1_branch.add_children([
-                IsMode1Selected(self),
 
-        ])
-        # Mode 2: Home monitoring
-        mode2_branch = py_trees.composites.Sequence(
-            name="MODE2_MONITORING_BRANCH", memory=False
+        patrol_branch = py_trees.composites.Sequence(
+            name="PATROL_BRANCH", memory=False
         )
-        mode2_branch.add_children(
+        patrol_branch.add_children(
             [
-                IsMode2Selected(self),
-                MoveToTarget(self),
+                PatrolMode(self),
+                MoveToHomeTarget(self, self.commander),
             ]
         )
 
@@ -135,9 +151,8 @@ class StatePublisher(Node):
         root.add_children(
             [
                 talk_branch,
-                action_recog_branch,
-                mode1_branch,
-                mode2_branch,
+                tracking_branch,
+                patrol_branch,
             ]
         )
 
