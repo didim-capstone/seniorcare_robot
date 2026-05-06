@@ -6,7 +6,7 @@ from rclpy.qos import (
     QoSHistoryPolicy,
     QoSDurabilityPolicy,
 )
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Float64
 from math import pi
 
 import py_trees
@@ -17,7 +17,12 @@ from enum import IntEnum
 
 from senior_msg.msg import ImuMsg, Vison2Master, Master2llm, Master2Base
 
-from senior_care_robot.base_commander import BaseCommander
+try:
+    from seniorcare_robot.base_commander import BaseCommander
+    _HAS_BASE_COMMANDER = True
+except ImportError:
+    BaseCommander = None
+    _HAS_BASE_COMMANDER = False
 
 from seniorcare_robot.conditions import (
     IsTalkRequested,
@@ -52,6 +57,7 @@ class StatePublisher(Node):
         )
 
         # Subscribers
+        # IMU: care_robot_control(person_follower_node)가 Imu 토픽으로 전달
         self.imu_sub = self.create_subscription(
             ImuMsg, 'Imu', self.imu_callback, qos_realiable)
         self.vision_sub = self.create_subscription(
@@ -61,11 +67,39 @@ class StatePublisher(Node):
             Master2llm, "llm2master", self.llm_callback, qos_realiable
         )
 
+        # 목 모터 구독: care_robot_control로부터 수신
+        # /neck_yaw_state : neck_controller_node가 퍼블리시하는 현재 목 각도
+        # /neck_yaw_target: person_follower_node가 퍼블리시하는 목표 목 각도
+        self.neck_yaw_state_sub = self.create_subscription(
+            Float64, '/neck_yaw_state', self._neck_yaw_state_cb, qos_realiable
+        )
+        self.neck_yaw_target_sub = self.create_subscription(
+            Float64, '/neck_yaw_target', self._neck_yaw_target_cb, qos_realiable
+        )
+
         self.mode = 0
         self.tracking_mode = 1
         self.pose_recog_requested = False
         self.talk_requested = False
-        self.commander = BaseCommander(self.motor_pub)
+        self.is_talk_requested = False
+        self.dont_follow = False
+        self.detect_fall = False
+        self.person_dist = 999.0
+        self.person_visible = False
+
+        # IMU 상태 (care_robot_control → Imu 토픽)
+        self.imu_roll = 0.0
+        self.imu_pitch = 0.0
+        self.imu_yaw = 0.0
+
+        # 목 모터 상태 (care_robot_control → neck_yaw_state / neck_yaw_target 토픽)
+        self.neck_yaw_state = 0.0
+        self.neck_yaw_target = 0.0
+
+        if _HAS_BASE_COMMANDER:
+            self.commander = BaseCommander(self.motor_pub)
+        else:
+            self.commander = None
 
         self.create_timer(0.01, self.tick_tree)
         self.tree = self.create_behavior_tree()
@@ -80,9 +114,15 @@ class StatePublisher(Node):
         self.robot_y = msg.robot_y
 
     def imu_callback(self, msg):
-        roll = msg.roll
-        pitch = msg.pitch
-        yaw = msg.yaw
+        self.imu_roll = msg.roll
+        self.imu_pitch = msg.pitch
+        self.imu_yaw = msg.yaw
+
+    def _neck_yaw_state_cb(self, msg):
+        self.neck_yaw_state = msg.data
+
+    def _neck_yaw_target_cb(self, msg):
+        self.neck_yaw_target = msg.data
 
     def vision_callback(self, msg):
         self.tracking_mode = msg.mode
