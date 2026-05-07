@@ -2,7 +2,7 @@ import py_trees
 from rclpy.node import Node
 
 from senior_msg.msg import Master2Base
-from senior_care_robot.base_commander import BaseCommander
+from seniorcare_robot.base_commander import BaseCommander
 
 
 import math

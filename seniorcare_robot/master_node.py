@@ -29,7 +29,6 @@ from seniorcare_robot.conditions import (
     IsPoseRecogRequested,
     FollowingMode,
     PatrolMode,
-    IsVoiceCallRequested,
     RobotMode,
 )
 
@@ -37,7 +36,6 @@ from seniorcare_robot.actions import (
     TryTalk,
     TrackingPerson,
     MoveToHomeTarget,
-    MoveToLidarPersonPosition,
 )
 
 
